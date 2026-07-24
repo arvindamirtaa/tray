@@ -1,0 +1,20 @@
+{
+  "name": "tray",
+  "version": "1.0.0",
+  "description": "Durable, auditable agent workflows",
+  "type": "module",
+  "scripts": {
+    "test:fixture": "cd fixture && python3 -m unittest -v"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@daytona/sdk": "^0.200.1",
+    "braintrust": "^3.24.0",
+    "openai": "^6.49.0",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "uuid": "^14.0.1"
+  }
+}
