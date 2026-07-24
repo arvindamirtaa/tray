@@ -4,8 +4,10 @@
   "description": "Durable, auditable agent workflows",
   "type": "module",
   "scripts": {
+    "smoke:daytona": "tsx --env-file=.env src/tools/smoke-daytona.ts",
     "smoke:eventlog": "tsx --env-file=.env src/tools/smoke-eventlog.ts",
-    "test:fixture": "cd fixture && python3 -m unittest -v"
+    "test:fixture": "cd fixture && python3 -m unittest -v",
+    "typecheck": "tsc"
   },
   "keywords": [],
   "author": "",
@@ -17,5 +19,9 @@
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/ws": "^8.18.1"
   }
 }
