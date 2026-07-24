@@ -10,6 +10,7 @@ import type {
 import { append, replay } from "./eventlog.js";
 import {
   createSandbox,
+  deleteSandboxQuietly,
   exec,
   getSandbox,
   readFile,
@@ -266,15 +267,20 @@ async function runWorkflowTraced(
     return decideTraced(runId, decision, span, sandbox);
   } catch (error) {
     const events = await replay(runId).catch(() => [] as GroundEvent[]);
-    if (createdByThisCall && !hasEvent(events, "failed")) {
+    let failureRecorded = hasEvent(events, "failed");
+    if (createdByThisCall && !failureRecorded) {
       try {
         await appendEvent("failed", {
           message: errorMessage(error),
           ...(sandboxId === undefined ? {} : { sandbox_id: sandboxId }),
         });
+        failureRecorded = true;
       } catch {
         // Preserve the workflow error if GroundCore cannot record the failure.
       }
+    }
+    if (failureRecorded && sandboxId !== undefined) {
+      await deleteSandboxQuietly(sandboxId);
     }
     throw error;
   }
@@ -314,15 +320,20 @@ export async function resumeWorkflow(
       return await decideTraced(runId, decision, span);
     } catch (error) {
       const currentEvents = await replay(runId).catch(() => events);
-      if (!hasEvent(currentEvents, "failed")) {
+      let failureRecorded = hasEvent(currentEvents, "failed");
+      if (!failureRecorded) {
         try {
           await appendEvent("failed", {
             message: errorMessage(error),
             sandbox_id: proposal.sandbox_id,
           });
+          failureRecorded = true;
         } catch {
           // Preserve the workflow error if GroundCore cannot record the failure.
         }
+      }
+      if (failureRecorded) {
+        await deleteSandboxQuietly(proposal.sandbox_id);
       }
       throw error;
     }
@@ -353,6 +364,7 @@ async function decideTraced(
     if (!hasEvent(events, "completed")) {
       await appendEvent("completed", { status: "rejected", sandbox_id: sandboxId });
     }
+    await deleteSandboxQuietly(activeSandbox ?? sandboxId);
     span.log({ output: { status: "rejected", run_id: runId } });
     return result(runId, "rejected", sandboxId);
   }
@@ -387,11 +399,15 @@ async function decideTraced(
         { run_id: runId, sandbox_id: sandboxId },
         () => writeFile(sandbox, sourcePath, persisted.new_content),
       );
+      if (process.env.TRAY_CRASH_AFTER_WRITE === "1") {
+        process.exit(1);
+      }
     } else if (currentContent !== persisted.new_content) {
       await appendEvent("failed", {
         message: "source changed since proposal",
         sandbox_id: sandboxId,
       });
+      await deleteSandboxQuietly(sandbox);
       return result(runId, "failed", sandboxId);
     }
     await appendEvent("applied", {
@@ -438,6 +454,7 @@ async function decideTraced(
   if (!hasEvent(events, "completed")) {
     await appendEvent("completed", { status: "completed", sandbox_id: sandboxId });
   }
+  await deleteSandboxQuietly(sandbox);
   span.log({
     output: {
       status: "completed",

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && vite build",
+    "cleanup": "tsx --env-file=.env src/tools/cleanup-sandboxes.ts",
     "dev": "tsx --env-file=.env src/server.ts --dev",
     "smoke:agent": "tsx --env-file=.env src/tools/smoke-agent.ts",
     "smoke:daytona": "tsx --env-file=.env src/tools/smoke-daytona.ts",

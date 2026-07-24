@@ -37,8 +37,12 @@ function requiredApiKey(): string {
   return apiKey;
 }
 
-function client(): Daytona {
+export function createDaytonaClient(): Daytona {
   return new Daytona({ apiKey: requiredApiKey() });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function truncateOutput(output: string): string {
@@ -55,7 +59,7 @@ function truncateOutput(output: string): string {
 }
 
 export async function createSandbox(): Promise<CreatedSandbox> {
-  const daytona = client();
+  const daytona = createDaytonaClient();
   const sandbox = await daytona.create(
     {
       language: "python",
@@ -85,7 +89,24 @@ export async function getSandbox(sandboxId: string): Promise<Sandbox> {
   if (!sandboxId.trim()) {
     throw new Error("sandboxId must not be empty");
   }
-  return client().get(sandboxId);
+  return createDaytonaClient().get(sandboxId);
+}
+
+export async function deleteSandboxQuietly(
+  sandboxOrId: Sandbox | string,
+): Promise<void> {
+  const sandboxId = typeof sandboxOrId === "string" ? sandboxOrId : sandboxOrId.id;
+  try {
+    const sandbox = typeof sandboxOrId === "string"
+      ? await getSandbox(sandboxOrId)
+      : sandboxOrId;
+    await sandbox.delete();
+    console.log(`Deleted Daytona sandbox ${sandboxId}`);
+  } catch (error) {
+    console.warn(
+      `Could not delete Daytona sandbox ${sandboxId}: ${errorMessage(error)}`,
+    );
+  }
 }
 
 export async function exec(

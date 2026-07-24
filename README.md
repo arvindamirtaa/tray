@@ -2,7 +2,7 @@
 
 Tray is a durable approval service for AI-generated code changes. Fireworks proposes a typed patch, Daytona executes it in an isolated sandbox, Braintrust records the trace and deterministic scores, and GroundCore records every workflow transition.
 
-This repository implements the workflow through Step 4: a durable event log, Daytona execution, Fireworks proposal generation, Braintrust tracing, a local HTTP approval service, restart recovery, and a responsive browser interface.
+This repository implements the workflow through Step 4a: a durable event log, Daytona execution, Fireworks proposal generation, Braintrust tracing, a local HTTP approval service, restart recovery, terminal-state sandbox cleanup, and a responsive browser interface.
 
 ## Problem
 
@@ -50,6 +50,7 @@ The apply stage does not use an in-memory proposal. It replays the `proposed` ev
 - Fixture files move through `sandbox.fs.uploadFile` and `downloadFile`; model-generated content is never passed through a shell heredoc.
 - Paths are resolved from `sandbox.getUserHomeDir()`.
 - Commands have a 60-second timeout and their combined output is bounded to 4 KiB.
+- Sandboxes remain active while a run awaits approval and are deleted after a terminal `completed` or `failed` event. Deletion failures are logged without changing the durable run result.
 - The scripted smoke verifies a failing unittest, applies the persisted replacement, and verifies the passing unittest in the same sandbox.
 
 ### Fireworks
@@ -143,20 +144,23 @@ npm run build
 npm run smoke:eventlog
 npm run smoke:daytona
 npm run smoke:agent
+npm run cleanup
 vendor/groundhog verify --chain --config ./data/ground/groundhog.toml
 ```
 
 - `smoke:eventlog` verifies ordered replay and duplicate ingestion.
 - `smoke:daytona` runs the full eight-event path with the scripted proposer.
 - `smoke:agent` runs the full path with live Fireworks and Braintrust, requires no fallback, checks both scores are `1`, and prints the Braintrust trace URL.
+- `cleanup` deletes all Daytona sandboxes in the configured account. Run it only when no workflow is awaiting approval.
 - A restart recovery check can create a run with `POST /api/runs`, restart the service after `proposed`, and submit approval through `POST /api/runs/:run_id/decision`.
+- To reproduce post-write recovery, start the service with `TRAY_CRASH_AFTER_WRITE=1`, approve a run, then restart without that variable. Startup recovery records one `applied` event with `recovered_after_write: true` and completes the run.
 
 ## Current limitations
 
 - This is a prototype containing one fixed Python workflow and fixture.
 - There is no HTTP authentication or multi-user authorization.
 - Idempotent event ingestion does not provide exactly-once external execution.
-- Daytona sandboxes have automatic stop and pause disabled and require explicit lifecycle management.
+- Daytona sandboxes have automatic stop and pause disabled while they await approval, so operators must avoid deleting a pending run's sandbox with `npm run cleanup`.
 - The vendored GroundCore binary is macOS ARM64; other platforms must build GroundCore from source.
 
 ## Disclosure
