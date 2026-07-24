@@ -436,6 +436,7 @@ async function decideTraced(
         throw new Error(`migration apply failed: ${execution.output}`);
       }
       if (process.env.TRAY_CRASH_AFTER_WRITE === "1") {
+        console.log(execution.output.trim());
         process.exit(1);
       }
     }

@@ -185,11 +185,16 @@ async function recoverInterruptedRuns(): Promise<void> {
       run.events.some((event) => event.kind === "approved"),
   );
   for (const run of interrupted) {
-    void exclusive(run.runId, () => resumeWorkflow(run.runId, "approve")).catch(
-      (error: unknown) => {
-        console.error(`Failed to recover ${run.runId}:`, error);
-      },
+    console.log(
+      `Recovering interrupted run ${run.runId}: approved but incomplete; resuming`,
     );
+    void exclusive(run.runId, () => resumeWorkflow(run.runId, "approve"))
+      .then((result) => {
+        console.log(`Recovered run ${run.runId}: ${result.status}`);
+      })
+      .catch((error: unknown) => {
+        console.error(`Failed to recover ${run.runId}:`, error);
+      });
   }
 }
 
@@ -234,6 +239,9 @@ async function main(): Promise<void> {
     server.once("error", rejectListen);
     server.listen(port, "127.0.0.1", resolveListen);
   });
+  if (process.env.TRAY_CRASH_AFTER_WRITE === "1") {
+    console.log("Crash-after-write armed");
+  }
   console.log(`Tray listening on http://127.0.0.1:${port}`);
 
   await recoverInterruptedRuns();
