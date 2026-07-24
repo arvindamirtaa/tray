@@ -18,7 +18,8 @@ const PROPOSE_MIGRATION_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
       properties: {
         sql: {
           type: "string",
-          description: "One UPDATE statement that credits the approved refund.",
+          description:
+            "One UPDATE statement that credits the approved refund by incrementing the balance (balance_cents = balance_cents + amount). Never set an absolute balance.",
         },
         reason: {
           type: "string",

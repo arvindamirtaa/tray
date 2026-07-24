@@ -1,0 +1,158 @@
+TRAY FULL-RUN TRANSCRIPT
+Date: 2026-07-24
+Timezone: America/Los_Angeles
+Workspace: /Users/arvind/Desktop/DaytonaHackathon/tray
+
+PURPOSE
+Execute and document the complete live approval workflow, including a controller
+restart before approval, screenshots, deterministic evaluation, durable-event
+verification, responsive rendering, and failure-state rendering.
+
+PRIMARY LIVE RUN
+Run ID: 7e77c9b0-6e54-45f8-add9-c37d0627a3a6
+Sandbox ID: b31a74d3-d839-4ac7-8469-1e4fb1d4beb1
+Task: Full verification: fix calc.py so total([1, 2, 3]) returns 6 without modifying the test.
+Final status: completed
+Final stage: Verified and completed
+Model fallback: absent
+Failure: none
+Braintrust trace:
+https://www.braintrust.dev/app/ArvindNedumaran/object?object_type=project_logs&object_id=940b9b9d-72c7-4f03-863c-3e0cbc3e29f5&id=4c3a2cd8001eb98c
+
+EVENT TIMELINE (LOCAL TIME)
+1. created    1:39:32 PM
+2. diagnosed  1:39:35 PM
+3. proposed   1:39:37 PM
+4. approved   1:40:38 PM
+5. applied    1:40:40 PM
+6. verified   1:40:40 PM
+7. evaluated  1:40:40 PM
+8. completed  1:40:40 PM
+
+RESTART CHECK
+- Tray was stopped after proposed and before approved.
+- Tray was restarted.
+- The browser was reloaded.
+- The same run ID, sandbox ID, three events, task, proposal, reason, diff, and
+  failing-test evidence were reconstructed from GroundCore.
+- The approval was then submitted through the browser interface.
+
+PATCH CONTRACT
+Path: calc.py
+
+Before:
+def total(items):
+    return sum(items[1:])
+
+After:
+def total(items):
+    return sum(items)
+
+Reason returned by the configured Fireworks model:
+The original implementation incorrectly skipped the first item by summing
+items[1:], causing total([1, 2, 3]) to return 5 instead of 6. Summing all items
+fixes the test.
+
+DAYTONA TEST EVIDENCE
+Before patch:
+test_total (test_calc.TestTotal.test_total) ... FAIL
+AssertionError: 5 != 6
+Ran 1 test in 0.000s
+FAILED (failures=1)
+
+After patch:
+test_total (test_calc.TestTotal.test_total) ... ok
+Ran 1 test in 0.000s
+OK
+
+BRAINTRUST EVALUATION
+tests_passed: 1.0
+patch_scope: 1.0
+
+SANDBOX LIFECYCLE
+Tray server output after completion:
+Deleted Daytona sandbox b31a74d3-d839-4ac7-8469-1e4fb1d4beb1
+
+STATIC VERIFICATION
+$ npm run typecheck
+> tsc
+Exit: 0
+
+$ npm run build
+> tsc && vite build
+vite v8.1.5 building client environment for production...
+333 modules transformed.
+dist/index.html                   0.67 kB | gzip:  0.37 kB
+dist/assets/index-NA-tjByH.css   39.01 kB | gzip:  7.71 kB
+dist/assets/index-DSxwpScl.js   223.73 kB | gzip: 67.21 kB | map: 909.58 kB
+Build completed successfully.
+Exit: 0
+
+GROUNDCORE DUPLICATE-INGEST VERIFICATION
+First execution:
+$ SMOKE_RUN_ID=fullrun-dup-20260724 npm run smoke:eventlog
+created append duplicate: false
+proposed append duplicate: false
+DUPLICATE OK
+Exit: 0
+
+Second execution with the identical run ID:
+$ SMOKE_RUN_ID=fullrun-dup-20260724 npm run smoke:eventlog
+created append duplicate: true
+proposed append duplicate: true
+DUPLICATE OK
+Exit: 0
+
+GROUNDCORE CHAIN VERIFICATION AFTER THE LIVE RUN
+$ vendor/groundhog verify --chain --config ./data/ground/groundhog.toml
+verified: 0 segments, 0 pending generations, 160 events; chain recomputed from
+genesis and every manifest head matches
+{"ok":true,"chain_checked":true,"segments_checked":0,"pending_checked":0,
+"events_checked":160,"orphans":[],"remnants":[],"failure":null}
+Exit: 0
+
+BROWSER VISUAL VERIFICATION
+- Desktop completed-run rendering: pass
+- Pending approval rendering: pass
+- Reload after controller restart: pass
+- Full diff and reason rendering: pass
+- Before/after test evidence rendering: pass
+- Eight-event ledger rendering: pass
+- Braintrust score and trace-link rendering: pass
+- Mobile 390 x 844 rendering: pass
+- Mobile navigation dialog: pass
+- Historical failure-state rendering: pass
+- Reject button rendering: pass; rejection behavior was not executed in the
+  successful primary run.
+
+SUPPLEMENTAL COMMAND STATUS
+$ npm run smoke:daytona
+Not executed. The execution environment rejected the command before process
+start because it would make additional authenticated outbound transmissions of
+repository data and telemetry without destination-specific authorization.
+
+$ npm run smoke:agent
+Not attempted after the same authorization boundary was identified. The live
+browser run had already verified the configured Fireworks, Daytona, Braintrust,
+and GroundCore integration path.
+
+PRODUCT SCOPE RECORDED FOR ACCURACY
+- This is one fixed Python workflow in a prototype.
+- Recovery is verified from proposed onward, not before proposed.
+- Resume is replay-driven and idempotent; this is not an exactly-once guarantee
+  for arbitrary external effects.
+- The proposal is schema-bound to calc.py and content-bound to the diagnosed
+  old_content.
+- There is no HTTP authentication or multi-user authorization in this prototype.
+
+SCREENSHOT FILES
+assets/01-initial-dashboard.png
+assets/02-start-run.png
+assets/03-pending-approval.png
+assets/04-restored-after-restart.png
+assets/05-completed-full.png
+assets/05a-completed-top.png
+assets/05b-completed-evidence.png
+assets/06-mobile-completed.png
+assets/07-mobile-navigation.png
+assets/08-failure-state.png
