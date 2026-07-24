@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "InterVariable", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", ui-monospace,
+    monospace;
+  --color-tray-50: #f0f7f3;
+  --color-tray-100: #dcece2;
+  --color-tray-200: #b9d9c5;
+  --color-tray-500: #397456;
+  --color-tray-600: #285f44;
+  --color-tray-700: #214c38;
+  --color-tray-800: #1d3d30;
+  --color-tray-900: #193229;
+  --color-tray-950: #0c1c16;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01", "ss03";
+  color-scheme: light dark;
+}
+
+body {
+  min-width: 20rem;
+  min-height: 100dvh;
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@utility activity-dot {
+  animation: activity-pulse 1.2s ease-in-out infinite;
+}

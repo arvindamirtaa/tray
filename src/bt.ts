@@ -37,6 +37,26 @@ export async function traceRun<T>(
   }
 }
 
+export async function traceResumedRun<T>(
+  runId: string,
+  parent: string,
+  callback: (span: Span) => Promise<T>,
+): Promise<T> {
+  try {
+    return await logger.traced(callback, {
+      name: "tray-resume",
+      type: "task",
+      parent,
+      event: {
+        input: { run_id: runId, action: "resume" },
+        metadata: { run_id: runId, resumed: true },
+      },
+    });
+  } finally {
+    await logger.flush();
+  }
+}
+
 export async function traceTool<T>(
   parent: Span,
   name: string,

@@ -37,6 +37,10 @@ function requiredApiKey(): string {
   return apiKey;
 }
 
+function client(): Daytona {
+  return new Daytona({ apiKey: requiredApiKey() });
+}
+
 function truncateOutput(output: string): string {
   const bytes = Buffer.from(output);
   if (bytes.byteLength <= MAX_OUTPUT_BYTES) {
@@ -51,7 +55,7 @@ function truncateOutput(output: string): string {
 }
 
 export async function createSandbox(): Promise<CreatedSandbox> {
-  const daytona = new Daytona({ apiKey: requiredApiKey() });
+  const daytona = client();
   const sandbox = await daytona.create(
     {
       language: "python",
@@ -75,6 +79,13 @@ export async function createSandbox(): Promise<CreatedSandbox> {
   );
 
   return { sandbox, sandboxId: sandbox.id, fixtureDir };
+}
+
+export async function getSandbox(sandboxId: string): Promise<Sandbox> {
+  if (!sandboxId.trim()) {
+    throw new Error("sandboxId must not be empty");
+  }
+  return client().get(sandboxId);
 }
 
 export async function exec(
