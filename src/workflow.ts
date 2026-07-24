@@ -1,4 +1,7 @@
-import type { GroundEvent } from "./eventlog.js";
+import type { Span } from "braintrust";
+
+import { traceRun, traceTool } from "./bt.js";
+import type { GroundEvent, RunEventKind } from "./eventlog.js";
 import { append, replay } from "./eventlog.js";
 import { createSandbox, exec, readFile, writeFile } from "./daytona.js";
 
@@ -40,6 +43,11 @@ export interface WorkflowResult {
   runId: string;
   status: WorkflowStatus;
   sandboxId?: string;
+  braintrustUrl?: string;
+  scores?: {
+    tests_passed: number;
+    patch_scope: number;
+  };
   events: GroundEvent[];
 }
 
@@ -80,32 +88,95 @@ async function result(
   runId: string,
   status: WorkflowStatus,
   sandboxId?: string,
+  braintrustUrl?: string,
+  scores?: WorkflowResult["scores"],
 ): Promise<WorkflowResult> {
-  return { runId, status, sandboxId, events: await replay(runId) };
+  return {
+    runId,
+    status,
+    sandboxId,
+    braintrustUrl,
+    scores,
+    events: await replay(runId),
+  };
 }
 
 export async function runWorkflow(
   options: RunWorkflowOptions,
 ): Promise<WorkflowResult> {
+  return traceRun(options.runId, (span) => runWorkflowTraced(options, span));
+}
+
+async function runWorkflowTraced(
+  options: RunWorkflowOptions,
+  span: Span,
+): Promise<WorkflowResult> {
   const { runId, task, proposer } = options;
   let sandboxId: string | undefined;
+  const groundcoreEventIds: string[] = [];
+
+  const appendEvent = async (
+    kind: RunEventKind,
+    payload: unknown,
+    attempt = 1,
+  ) => {
+    const batchId = `tray/${runId}/${kind}/${attempt}`;
+    return span.traced(
+      async (appendSpan) => {
+        appendSpan.log({
+          input: { kind, run_id: runId, payload },
+          metadata: { batch_id: batchId, run_id: runId },
+        });
+        const receipt = await append(kind, runId, payload, attempt);
+        groundcoreEventIds.push(receipt.raw.first_event_id);
+        appendSpan.log({
+          output: receipt,
+          metadata: {
+            batch_id: batchId,
+            first_event_id: receipt.raw.first_event_id,
+            last_event_id: receipt.raw.last_event_id,
+          },
+        });
+        span.log({
+          metadata: {
+            groundcore_event_ids: [...groundcoreEventIds],
+          },
+        });
+        return receipt;
+      },
+      { name: "groundcore.append", type: "tool" },
+    );
+  };
 
   try {
-    await append("created", runId, {
+    await appendEvent("created", {
       task,
       fixture: "python-off-by-one",
     });
 
-    const created = await createSandbox();
+    const created = await traceTool(
+      span,
+      "daytona.create",
+      { language: "python", autoStopInterval: 0, autoPauseInterval: 0 },
+      { run_id: runId },
+      createSandbox,
+      (createdSandbox) => ({
+        sandbox_id: createdSandbox.sandboxId,
+        fixture_dir: createdSandbox.fixtureDir,
+      }),
+    );
     const { sandbox, fixtureDir } = created;
     sandboxId = created.sandboxId;
+    span.log({ metadata: { sandbox_id: sandboxId } });
 
-    const diagnosed = await exec(
-      sandbox,
-      "python -m unittest -v 2>&1",
-      fixtureDir,
+    const diagnosed = await traceTool(
+      span,
+      "daytona.exec",
+      { command: "python -m unittest -v 2>&1", cwd: fixtureDir },
+      { run_id: runId, sandbox_id: sandboxId, phase: "diagnose" },
+      () => exec(sandbox, "python -m unittest -v 2>&1", fixtureDir),
     );
-    await append("diagnosed", runId, {
+    await appendEvent("diagnosed", {
       ...diagnosed,
       sandbox_id: sandboxId,
     });
@@ -123,7 +194,7 @@ export async function runWorkflow(
       old_content: oldContent,
       sandbox_id: sandboxId,
     });
-    await append("proposed", runId, {
+    await appendEvent("proposed", {
       path: proposal.path,
       new_content: proposal.new_content,
       old_content: oldContent,
@@ -140,15 +211,16 @@ export async function runWorkflow(
       return result(runId, "awaiting_approval", sandboxId);
     }
     if (decision === "reject") {
-      await append("rejected", runId, { sandbox_id: sandboxId });
-      await append("completed", runId, {
+      await appendEvent("rejected", { sandbox_id: sandboxId });
+      await appendEvent("completed", {
         status: "rejected",
         sandbox_id: sandboxId,
       });
+      span.log({ output: { status: "rejected", run_id: runId } });
       return result(runId, "rejected", sandboxId);
     }
 
-    await append("approved", runId, { sandbox_id: sandboxId });
+    await appendEvent("approved", { sandbox_id: sandboxId });
 
     // The apply step consumes only the proposal persisted in GroundCore.
     const persisted = proposalFrom(await replay(runId));
@@ -157,25 +229,33 @@ export async function runWorkflow(
     }
     const currentContent = await readFile(sandbox, sourcePath);
     if (currentContent !== persisted.old_content) {
-      await append("failed", runId, {
+      await appendEvent("failed", {
         message: "source changed since proposal",
         sandbox_id: sandboxId,
       });
       return result(runId, "failed", sandboxId);
     }
 
-    await writeFile(sandbox, sourcePath, persisted.new_content);
-    await append("applied", runId, {
+    await traceTool(
+      span,
+      "daytona.write_file",
+      { path: persisted.path },
+      { run_id: runId, sandbox_id: sandboxId },
+      () => writeFile(sandbox, sourcePath, persisted.new_content),
+    );
+    await appendEvent("applied", {
       exitCode: 0,
       sandbox_id: sandboxId,
     });
 
-    const verified = await exec(
-      sandbox,
-      "python -m unittest -v 2>&1",
-      fixtureDir,
+    const verified = await traceTool(
+      span,
+      "daytona.exec",
+      { command: "python -m unittest -v 2>&1", cwd: fixtureDir },
+      { run_id: runId, sandbox_id: sandboxId, phase: "verify" },
+      () => exec(sandbox, "python -m unittest -v 2>&1", fixtureDir),
     );
-    await append("verified", runId, {
+    await appendEvent("verified", {
       ...verified,
       sandbox_id: sandboxId,
     });
@@ -185,20 +265,36 @@ export async function runWorkflow(
 
     const testsPassed = verified.exitCode === 0 ? 1 : 0;
     const patchScope = persisted.path === "calc.py" ? 1 : 0;
-    await append("evaluated", runId, {
+    const scores = {
       tests_passed: testsPassed,
       patch_scope: patchScope,
+    };
+    span.log({ scores });
+    const braintrustUrl = await span.permalink();
+    await appendEvent("evaluated", {
+      tests_passed: testsPassed,
+      patch_scope: patchScope,
+      braintrust_url: braintrustUrl,
       sandbox_id: sandboxId,
     });
-    await append("completed", runId, {
+    await appendEvent("completed", {
       status: "completed",
       sandbox_id: sandboxId,
     });
+    span.log({
+      output: {
+        status: "completed",
+        run_id: runId,
+        sandbox_id: sandboxId,
+        braintrust_url: braintrustUrl,
+      },
+      metadata: { groundcore_event_ids: [...groundcoreEventIds] },
+    });
 
-    return result(runId, "completed", sandboxId);
+    return result(runId, "completed", sandboxId, braintrustUrl, scores);
   } catch (error) {
     try {
-      await append("failed", runId, {
+      await appendEvent("failed", {
         message: errorMessage(error),
         ...(sandboxId === undefined ? {} : { sandbox_id: sandboxId }),
       });
@@ -208,4 +304,3 @@ export async function runWorkflow(
     throw error;
   }
 }
-

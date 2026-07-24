@@ -4,6 +4,7 @@
   "description": "Durable, auditable agent workflows",
   "type": "module",
   "scripts": {
+    "smoke:agent": "tsx --env-file=.env src/tools/smoke-agent.ts",
     "smoke:daytona": "tsx --env-file=.env src/tools/smoke-daytona.ts",
     "smoke:eventlog": "tsx --env-file=.env src/tools/smoke-eventlog.ts",
     "test:fixture": "cd fixture && python3 -m unittest -v",

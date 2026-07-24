@@ -35,6 +35,7 @@ Run the foundation and Daytona integration checks:
 npm run typecheck
 npm run smoke:eventlog
 npm run smoke:daytona
+npm run smoke:agent
 ```
 
 ## Disclosure
