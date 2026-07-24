@@ -13,8 +13,6 @@ import {
   deleteSandboxQuietly,
   exec,
   getSandbox,
-  readFile,
-  writeFile,
 } from "./daytona.js";
 
 export interface Proposal {
@@ -28,7 +26,7 @@ export interface ProposerContext {
   runId: string;
   task: string;
   failingOutput: string;
-  path: "calc.py";
+  path: "app.db";
   old_content: string;
   sandbox_id: string;
 }
@@ -203,7 +201,7 @@ async function runWorkflowTraced(
 
     await appendEvent("created", {
       task,
-      fixture: "python-off-by-one",
+      fixture: "refund-migration",
       mode: "workflow",
     });
     createdByThisCall = true;
@@ -226,22 +224,21 @@ async function runWorkflowTraced(
     const diagnosed = await traceTool(
       span,
       "daytona.exec",
-      { command: "python -m unittest -v 2>&1", cwd: fixtureDir },
+      { command: "python check.py 2>&1", cwd: fixtureDir },
       { run_id: runId, sandbox_id: sandboxId, phase: "diagnose" },
-      () => exec(sandbox, "python -m unittest -v 2>&1", fixtureDir),
+      () => exec(sandbox, "python check.py 2>&1", fixtureDir),
     );
     await appendEvent("diagnosed", { ...diagnosed, sandbox_id: sandboxId });
     if (diagnosed.exitCode === 0) {
-      throw new Error("fixture test unexpectedly passed before patching");
+      throw new Error("refund fixture unexpectedly passed before migration");
     }
 
-    const sourcePath = `${fixtureDir}/calc.py`;
-    const oldContent = await readFile(sandbox, sourcePath);
+    const oldContent = diagnosed.output;
     const proposal = await proposer({
       runId,
       task,
       failingOutput: diagnosed.output,
-      path: "calc.py",
+      path: "app.db",
       old_content: oldContent,
       sandbox_id: sandboxId,
     });
@@ -386,34 +383,66 @@ async function decideTraced(
     throw new Error(`Daytona sandbox ${sandboxId} did not report a home directory`);
   }
   const fixtureDir = `${home}/fixture`;
-  const sourcePath = `${fixtureDir}/${persisted.path}`;
 
   events = await replay(runId);
   if (!hasEvent(events, "applied")) {
-    const currentContent = await readFile(sandbox, sourcePath);
-    if (currentContent === persisted.old_content) {
+    if (!/^[a-zA-Z0-9-]{1,100}$/.test(runId)) {
+      throw new Error("run ID cannot be passed safely to the migration executor");
+    }
+    const markerCommand =
+      `python -c "import sqlite3;print(sqlite3.connect('app.db')` +
+      `.execute('SELECT 1 FROM _migrations WHERE id=?',('${runId}',))` +
+      `.fetchone() is not None)"`;
+    const marker = await traceTool(
+      span,
+      "daytona.exec",
+      { command: markerCommand, cwd: fixtureDir },
+      { run_id: runId, sandbox_id: sandboxId, phase: "reconcile" },
+      () => exec(sandbox, markerCommand, fixtureDir),
+    );
+    if (marker.exitCode !== 0) {
+      throw new Error(`failed to query migration marker: ${marker.output}`);
+    }
+    const markerState = marker.output.trim();
+    if (markerState !== "True" && markerState !== "False") {
+      throw new Error(`migration marker returned unexpected output: ${marker.output}`);
+    }
+
+    let recoveredAfterWrite = markerState === "True";
+    let applyExitCode = 0;
+    if (!recoveredAfterWrite) {
+      const migrationPath = `${fixtureDir}/migration.sql`;
       await traceTool(
         span,
-        "daytona.write_file",
-        { path: persisted.path },
+        "daytona.upload_file",
+        { path: "migration.sql" },
         { run_id: runId, sandbox_id: sandboxId },
-        () => writeFile(sandbox, sourcePath, persisted.new_content),
+        () => sandbox.fs.uploadFile(
+          Buffer.from(persisted.new_content),
+          migrationPath,
+        ),
       );
+      const applyCommand = `python apply.py ${runId} 2>&1`;
+      const execution = await traceTool(
+        span,
+        "daytona.exec",
+        { command: applyCommand, cwd: fixtureDir },
+        { run_id: runId, sandbox_id: sandboxId, phase: "apply" },
+        () => exec(sandbox, applyCommand, fixtureDir),
+      );
+      applyExitCode = execution.exitCode;
+      recoveredAfterWrite = execution.output.includes("ALREADY_APPLIED");
+      if (execution.exitCode !== 0) {
+        throw new Error(`migration apply failed: ${execution.output}`);
+      }
       if (process.env.TRAY_CRASH_AFTER_WRITE === "1") {
         process.exit(1);
       }
-    } else if (currentContent !== persisted.new_content) {
-      await appendEvent("failed", {
-        message: "source changed since proposal",
-        sandbox_id: sandboxId,
-      });
-      await deleteSandboxQuietly(sandbox);
-      return result(runId, "failed", sandboxId);
     }
     await appendEvent("applied", {
-      exitCode: 0,
+      exitCode: applyExitCode,
       sandbox_id: sandboxId,
-      recovered_after_write: currentContent === persisted.new_content,
+      recovered_after_write: recoveredAfterWrite,
     });
   }
 
@@ -423,15 +452,15 @@ async function decideTraced(
     const execution = await traceTool(
       span,
       "daytona.exec",
-      { command: "python -m unittest -v 2>&1", cwd: fixtureDir },
+      { command: "python check.py 2>&1", cwd: fixtureDir },
       { run_id: runId, sandbox_id: sandboxId, phase: "verify" },
-      () => exec(sandbox, "python -m unittest -v 2>&1", fixtureDir),
+      () => exec(sandbox, "python check.py 2>&1", fixtureDir),
     );
     verified = execution;
     await appendEvent("verified", { ...execution, sandbox_id: sandboxId });
   }
   if (verified.exitCode !== 0) {
-    throw new Error("fixture test still fails after patching");
+    throw new Error("refund fixture still fails after migration");
   }
 
   events = await replay(runId);
@@ -439,7 +468,7 @@ async function decideTraced(
   if (!evaluated) {
     const scores = {
       tests_passed: 1,
-      patch_scope: persisted.path === "calc.py" ? 1 : 0,
+      patch_scope: persisted.path === "app.db" ? 1 : 0,
     };
     span.log({ scores });
     const braintrustUrl = await span.permalink();

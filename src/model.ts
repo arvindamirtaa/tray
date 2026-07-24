@@ -4,36 +4,36 @@ import { tracedOpenAI } from "./bt.js";
 import { scriptedProposer } from "./scripted.js";
 import type { Proposal, Proposer } from "./workflow.js";
 
-const SYSTEM_PROMPT = `You are Tray's patch proposer. Given a failing test and source file, propose the minimal patch. Only modify calc.py. Never modify test files. The new_content argument must contain the complete replacement contents of calc.py, not a diff or patch.`;
+const SYSTEM_PROMPT = `You are Tray's migration proposer. Diagnose the refund mismatch and propose one SQL UPDATE statement that fixes it. Do not modify the schema or the executor-owned _migrations table.`;
 
-const PROPOSE_PATCH_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
+const PROPOSE_MIGRATION_TOOL: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: "function",
   function: {
-    name: "propose_patch",
-    description: "Propose a complete replacement for calc.py.",
+    name: "propose_migration",
+    description:
+      "Propose the SQL migration that fixes the mismatch. One statement. UPDATE only.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
-        path: {
+        sql: {
           type: "string",
-          enum: ["calc.py"],
-          description: "The only file that may be modified.",
-        },
-        new_content: {
-          type: "string",
-          description:
-            "The complete replacement contents of calc.py. Do not return a diff.",
+          description: "One UPDATE statement that credits the approved refund.",
         },
         reason: {
           type: "string",
-          description: "A concise explanation of why the replacement fixes the test.",
+          description: "A concise explanation of why the migration fixes the mismatch.",
         },
       },
-      required: ["path", "new_content", "reason"],
+      required: ["sql", "reason"],
     },
   },
 };
+
+interface MigrationArguments {
+  sql: string;
+  reason: string;
+}
 
 function requiredEnv(name: "FIREWORKS_API_KEY" | "FIREWORKS_MODEL"): string {
   const value = process.env[name]?.trim();
@@ -45,34 +45,36 @@ function requiredEnv(name: "FIREWORKS_API_KEY" | "FIREWORKS_MODEL"): string {
 
 function parseProposal(
   completion: OpenAI.Chat.Completions.ChatCompletion,
-  oldContent: string,
 ): Proposal | undefined {
   const call = completion.choices[0]?.message.tool_calls?.find(
     (candidate) =>
       candidate.type === "function" &&
-      candidate.function.name === "propose_patch",
+      candidate.function.name === "propose_migration",
   );
   if (!call || call.type !== "function") {
     return undefined;
   }
 
   try {
-    const value = JSON.parse(call.function.arguments) as Partial<Proposal>;
-    const newContent = value.new_content?.trim();
+    const value = JSON.parse(call.function.arguments) as Partial<MigrationArguments>;
+    const sql = value.sql?.trim();
+    const statements = sql
+      ?.split(";")
+      .map((statement) => statement.trim())
+      .filter(Boolean);
     if (
-      value.path !== "calc.py" ||
-      !newContent ||
-      value.new_content === oldContent ||
+      !sql ||
+      statements?.length !== 1 ||
+      !/^UPDATE\b/i.test(sql) ||
+      /\b(?:DROP|DELETE)\b|_migrations/i.test(sql) ||
       typeof value.reason !== "string" ||
-      !value.reason.trim() ||
-      !newContent.includes("def total") ||
-      newContent.startsWith("---")
+      !value.reason.trim()
     ) {
       return undefined;
     }
     return {
-      path: value.path,
-      new_content: value.new_content!,
+      path: "app.db",
+      new_content: sql,
       reason: value.reason,
     };
   } catch {
@@ -85,8 +87,8 @@ export const fireworksProposer: Proposer = async (context) => {
   const model = requiredEnv("FIREWORKS_MODEL");
   const userPrompt = [
     `Task:\n${context.task}`,
-    `Failing unittest output:\n${context.failingOutput}`,
-    `Current calc.py contents:\n${context.old_content}`,
+    `Refund consistency check output:\n${context.failingOutput}`,
+    `Database schema:\nCREATE TABLE accounts(id INTEGER PRIMARY KEY, email TEXT, balance_cents INTEGER NOT NULL);\nCREATE TABLE orders(id INTEGER PRIMARY KEY, account_id INTEGER, amount_cents INTEGER, status TEXT);\nCREATE TABLE _migrations(id TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP);`,
   ].join("\n\n");
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -98,13 +100,13 @@ export const fireworksProposer: Proposer = async (context) => {
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
         ],
-        tools: [PROPOSE_PATCH_TOOL],
+        tools: [PROPOSE_MIGRATION_TOOL],
         tool_choice: {
           type: "function",
-          function: { name: "propose_patch" },
+          function: { name: "propose_migration" },
         },
       });
-      const proposal = parseProposal(completion, context.old_content);
+      const proposal = parseProposal(completion);
       if (proposal) {
         return proposal;
       }
@@ -118,4 +120,3 @@ export const fireworksProposer: Proposer = async (context) => {
     model_fallback: true,
   };
 };
-

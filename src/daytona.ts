@@ -1,22 +1,10 @@
 import { Daytona, type Sandbox } from "@daytona/sdk";
+import { readFile as readLocalFile } from "node:fs/promises";
 
 const MAX_OUTPUT_BYTES = 4 * 1024;
 const EXEC_TIMEOUT_SECONDS = 60;
 
-const CALC_SOURCE = `def total(items):
-    return sum(items[1:])
-`;
-
-const TEST_SOURCE = `import unittest
-from calc import total
-
-class TestTotal(unittest.TestCase):
-    def test_total(self):
-        self.assertEqual(total([1, 2, 3]), 6)
-
-if __name__ == "__main__":
-    unittest.main()
-`;
+const FIXTURE_FILES = ["seed.py", "check.py", "apply.py"] as const;
 
 export interface CreatedSandbox {
   sandbox: Sandbox;
@@ -75,12 +63,22 @@ export async function createSandbox(): Promise<CreatedSandbox> {
   }
 
   const fixtureDir = `${home}/fixture`;
-  await sandbox.fs.createFolder(fixtureDir, "755");
-  await sandbox.fs.uploadFile(Buffer.from(CALC_SOURCE), `${fixtureDir}/calc.py`);
-  await sandbox.fs.uploadFile(
-    Buffer.from(TEST_SOURCE),
-    `${fixtureDir}/test_calc.py`,
-  );
+  try {
+    await sandbox.fs.createFolder(fixtureDir, "755");
+    for (const filename of FIXTURE_FILES) {
+      const content = await readLocalFile(
+        new URL(`../fixture/${filename}`, import.meta.url),
+      );
+      await sandbox.fs.uploadFile(content, `${fixtureDir}/${filename}`);
+    }
+    const seeded = await exec(sandbox, "python seed.py 2>&1", fixtureDir);
+    if (seeded.exitCode !== 0) {
+      throw new Error(`failed to seed refund fixture: ${seeded.output}`);
+    }
+  } catch (error) {
+    await deleteSandboxQuietly(sandbox);
+    throw error;
+  }
 
   return { sandbox, sandboxId: sandbox.id, fixtureDir };
 }
@@ -124,16 +122,4 @@ export async function exec(
     exitCode: response.exitCode,
     output: truncateOutput(response.result ?? response.artifacts?.stdout ?? ""),
   };
-}
-
-export async function readFile(sandbox: Sandbox, path: string): Promise<string> {
-  return (await sandbox.fs.downloadFile(path)).toString("utf8");
-}
-
-export async function writeFile(
-  sandbox: Sandbox,
-  path: string,
-  content: string,
-): Promise<void> {
-  await sandbox.fs.uploadFile(Buffer.from(content), path);
 }

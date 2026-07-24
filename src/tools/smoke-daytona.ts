@@ -30,7 +30,7 @@ async function main(): Promise<void> {
 
   const workflow = await runWorkflow({
     runId,
-    task: "Fix the Python off-by-one error",
+    task: "Credit order 9001's approved refund to account 4412 exactly once",
     proposer: scriptedProposer,
     autoApprove: true,
   });
@@ -50,17 +50,23 @@ async function main(): Promise<void> {
   const verified = payloadOf(events, "verified");
 
   assert.notEqual(diagnosed.exitCode, 0);
+  assert.match(String(diagnosed.output), /MISMATCH/);
   assert.equal(verified.exitCode, 0);
-  assert.equal(proposed.path, "calc.py");
+  assert.match(String(verified.output), /account 4412 balance_cents=2500/);
+  assert.equal(proposed.path, "app.db");
   assert.equal(typeof proposed.old_content, "string");
   assert.equal(typeof proposed.new_content, "string");
+  assert.match(String(proposed.new_content), /^UPDATE\b/i);
   assert.equal(proposed.sandbox_id, workflow.sandboxId);
+  assert.equal(applied.exitCode, 0);
   assert.equal(applied.sandbox_id, workflow.sandboxId);
   assert.equal(verified.sandbox_id, workflow.sandboxId);
+  assert.equal(workflow.scores?.tests_passed, 1);
+  assert.equal(workflow.scores?.patch_scope, 1);
 
-  console.log("\n--- failing unittest ---");
+  console.log("\n--- refund mismatch ---");
   console.log(diagnosed.output);
-  console.log("--- passing unittest ---");
+  console.log("--- verified balance ---");
   console.log(verified.output);
   console.log(`SANDBOX_ID=${workflow.sandboxId}`);
   console.log(`WALL_TIME_MS=${Date.now() - startedAt}`);
@@ -71,4 +77,3 @@ main().catch((error: unknown) => {
   console.error(error);
   process.exitCode = 1;
 });
-

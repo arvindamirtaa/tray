@@ -1,14 +1,14 @@
 # Tray
 
-Tray is a durable approval service for AI-generated code changes. Fireworks proposes a typed patch, Daytona executes it in an isolated sandbox, Braintrust records the trace and deterministic scores, and GroundCore records every workflow transition.
+Tray is a durable approval service for AI-generated database changes. Fireworks proposes a typed SQL migration, Daytona executes it in an isolated sandbox, Braintrust records the trace and deterministic scores, and GroundCore records every workflow transition.
 
-This repository implements the workflow through Step 4a: a durable event log, Daytona execution, Fireworks proposal generation, Braintrust tracing, a local HTTP approval service, restart recovery, terminal-state sandbox cleanup, and a responsive browser interface.
+This repository implements the workflow through Step 4c: a durable event log, Daytona execution, Fireworks migration generation, Braintrust tracing, a local HTTP approval service, transactional restart recovery, terminal-state sandbox cleanup, and a responsive browser interface.
 
 ## Problem
 
 An AI coding workflow can lose a pending operation when its controller restarts. If a proposal, approval state, or execution result exists only in process memory, the workflow cannot reliably resume and its actions cannot be audited afterward.
 
-Tray persists each transition before moving to the next action. A `proposed` event contains the complete executable operation: path, previous file contents, replacement file contents, reason, and Daytona sandbox ID. Approval and execution consume the persisted proposal instead of requesting another model response.
+Tray persists each transition before moving to the next action. A `proposed` event contains the complete executable operation: database path, diagnostic report, SQL statement, reason, and Daytona sandbox ID. Approval and execution consume the persisted proposal instead of requesting another model response. The proposal is schema-bound to one database, and approval authorizes exactly the persisted statement.
 
 ## Architecture
 
@@ -16,8 +16,8 @@ Tray persists each transition before moving to the next action. A `proposed` eve
 flowchart LR
     Operator["Operator or smoke runner"] --> Tray["Tray workflow"]
     Tray -->|"append and replay events"| GroundCore["GroundCore event log"]
-    Tray -->|"forced propose_patch call"| Fireworks["Fireworks: Kimi K2.7 Code"]
-    Tray -->|"upload, test, and patch"| Daytona["Daytona sandbox"]
+    Tray -->|"forced propose_migration call"| Fireworks["Fireworks: Kimi K2.7 Code"]
+    Tray -->|"check and apply migration"| Daytona["Daytona sandbox"]
     Tray -->|"root trace, child spans, scores"| Braintrust["Braintrust project: tray"]
 ```
 
@@ -31,7 +31,7 @@ created → diagnosed → proposed → approved → applied → verified → eva
 
 `failed` records an execution error. `rejected → completed` records a rejected proposal. Without auto-approval, the headless workflow stops after `proposed` and reports `awaiting_approval`.
 
-The apply stage does not use an in-memory proposal. It replays the `proposed` event from GroundCore, downloads the current source from Daytona, verifies it still equals the persisted `old_content`, and writes the persisted `new_content`. A mismatch produces `failed` with `source changed since proposal`.
+The apply stage does not use an in-memory proposal. It replays the `proposed` event from GroundCore, checks the sandbox database for a marker matching the run ID, and executes the persisted SQL only when the marker is absent. The executor writes the marker and balance update in one database transaction, so recovery can determine whether execution already occurred without crediting the refund twice.
 
 ## Integrations
 
@@ -47,19 +47,19 @@ The apply stage does not use an in-memory proposal. It replays the `proposed` ev
 ### Daytona
 
 - Every run creates a Python sandbox with `autoStopInterval: 0` and `autoPauseInterval: 0`.
-- Fixture files move through `sandbox.fs.uploadFile` and `downloadFile`; model-generated content is never passed through a shell heredoc.
+- The sandbox contains a seeded SQLite database, a refund consistency check, and an executor-owned migration script. Files move through `sandbox.fs.uploadFile`; model-generated SQL is never passed through a shell heredoc.
 - Paths are resolved from `sandbox.getUserHomeDir()`.
 - Commands have a 60-second timeout and their combined output is bounded to 4 KiB.
 - Sandboxes remain active while a run awaits approval and are deleted after a terminal `completed` or `failed` event. Deletion failures are logged without changing the durable run result.
-- The scripted smoke verifies a failing unittest, applies the persisted replacement, and verifies the passing unittest in the same sandbox.
+- The scripted smoke diagnoses the missing 2500-cent credit, applies the persisted migration, and verifies an exact 2500-cent balance in the same sandbox.
 
 ### Fireworks
 
 - The pinned serverless model is `accounts/fireworks/models/kimi-k2p7-code`.
-- One OpenAI-compatible chat completion receives the task, failing unittest output, and complete `calc.py` source.
-- `tool_choice` forces the `propose_patch` function and temperature is `0`.
-- Returned arguments must select `calc.py` and provide non-empty complete replacement content that differs from the original.
-- One invalid response is retried. A second failure uses the scripted proposer and persists `model_fallback: true`; a fallback is never represented as a model-generated patch.
+- One OpenAI-compatible chat completion receives the task, refund consistency report, and three-table SQLite schema.
+- `tool_choice` forces the `propose_migration` function and temperature is `0`.
+- Returned arguments must contain one non-empty `UPDATE` statement and must not contain `DROP`, `DELETE`, or references to the executor-owned `_migrations` table.
+- One invalid response is retried. A second failure uses the scripted proposer and persists `model_fallback: true`; a fallback is never represented as a model-generated migration.
 
 ### Braintrust
 
@@ -78,14 +78,14 @@ The apply stage does not use an in-memory proposal. It replays the `proposed` ev
 - `POST /api/runs/:run_id/decision` accepts `approve` or `reject` and consumes the persisted proposal.
 - `POST /api/runs/:run_id/resume` resumes an interrupted run after its approval was persisted.
 - On startup, the service automatically resumes approved runs that have not reached a terminal event.
-- Approval reconnects to Daytona with the persisted sandbox ID. If the controller stopped after writing the new file but before recording `applied`, recovery recognizes the exact persisted `new_content` and continues without writing a second change.
+- Approval reconnects to Daytona with the persisted sandbox ID. If the controller stopped after committing the migration but before recording `applied`, recovery finds the transactional run marker and continues without crediting the account again.
 - The persisted Braintrust parent context connects post-restart approval work to the original trace.
 
 ### Browser interface
 
 - The run list and detail view replay persisted workflow state from the HTTP API.
-- Pending runs show the complete replacement, reason, failing test output, and explicit approve and reject actions.
-- Completed runs show before-and-after test evidence, the eight-event ledger, deterministic scores, and the Braintrust trace link.
+- Pending runs show the diagnostic report, complete SQL statement, reason, and explicit approve and reject actions.
+- Completed runs show before-and-after consistency evidence, the eight-event ledger, deterministic scores, and the Braintrust trace link.
 - The layout includes desktop run navigation, a mobile navigation dialog, operating-system dark mode, keyboard focus states, and mobile touch targets.
 
 ## Setup
@@ -153,11 +153,11 @@ vendor/groundhog verify --chain --config ./data/ground/groundhog.toml
 - `smoke:agent` runs the full path with live Fireworks and Braintrust, requires no fallback, checks both scores are `1`, and prints the Braintrust trace URL.
 - `cleanup` deletes all Daytona sandboxes in the configured account. Run it only when no workflow is awaiting approval.
 - A restart recovery check can create a run with `POST /api/runs`, restart the service after `proposed`, and submit approval through `POST /api/runs/:run_id/decision`.
-- To reproduce post-write recovery, start the service with `TRAY_CRASH_AFTER_WRITE=1`, approve a run, then restart without that variable. Startup recovery records one `applied` event with `recovered_after_write: true` and completes the run.
+- To reproduce post-commit recovery, start the service with `TRAY_CRASH_AFTER_WRITE=1`, approve a run, then restart without that variable. Startup recovery finds the transactional marker, records one `applied` event with `recovered_after_write: true`, verifies the balance remains exactly 2500 cents, and completes the run.
 
 ## Current limitations
 
-- This is a prototype containing one fixed Python workflow and fixture.
+- This is a prototype containing one fixed refund-migration workflow and fixture.
 - There is no HTTP authentication or multi-user authorization.
 - Idempotent event ingestion does not provide exactly-once external execution.
 - Daytona sandboxes have automatic stop and pause disabled while they await approval, so operators must avoid deleting a pending run's sandbox with `npm run cleanup`.
